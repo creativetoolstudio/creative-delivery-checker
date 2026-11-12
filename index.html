@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#101827">
+  <title>Creative Delivery Checker</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 20px 14px 40px;
+      background: #101827;
+      color: #edf2f7;
+      font-family: Arial, sans-serif;
+    }
+    .container { max-width: 850px; margin: auto; }
+    header { text-align: center; padding: 22px 0; }
+    h1 { font-size: 27px; margin: 0 0 10px; }
+    header p { color: #aab7c8; line-height: 1.5; }
+    .panel {
+      background: #1b293b;
+      border: 1px solid #34445b;
+      border-radius: 14px;
+      padding: 18px;
+      margin-bottom: 16px;
+    }
+    .upload {
+      border: 2px dashed #607895;
+      border-radius: 12px;
+      padding: 28px 12px;
+      text-align: center;
+    }
+    input[type=file] { width: 100%; margin-top: 15px; }
+    button {
+      border: 0;
+      border-radius: 9px;
+      padding: 11px 16px;
+      font-weight: bold;
+      cursor: pointer;
+      margin: 5px 5px 5px 0;
+      background: #38bdf8;
+      color: #082032;
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .secondary { background: #34445b; color: white; }
+    .note { color: #aab7c8; font-size: 13px; line-height: 1.6; }
+    #message { color: #facc15; min-height: 22px; margin-top: 12px; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 9px;
+      margin-bottom: 16px;
+    }
+    .stat {
+      background: #1b293b;
+      border-radius: 10px;
+      padding: 13px 5px;
+      text-align: center;
+    }
+    .stat strong { display: block; font-size: 23px; }
+    .stat span { color: #aab7c8; font-size: 12px; }
+    #results { display: grid; gap: 12px; }
+    .item {
+      display: grid;
+      grid-template-columns: 90px 1fr;
+      gap: 13px;
+      align-items: center;
+      background: #1b293b;
+      border: 1px solid #34445b;
+      border-radius: 12px;
+      padding: 12px;
+      min-width: 0;
+    }
+    .preview {
+      width: 90px;
+      height: 90px;
+      object-fit: contain;
+      background: #0c1420;
+      border-radius: 8px;
+    }
+    .details { min-width: 0; }
+    .filename {
+      font-weight: bold;
+      overflow-wrap: anywhere;
+      margin-bottom: 7px;
+    }
+    .details p { margin: 4px 0; color: #b8c5d5; font-size: 13px; }
+    .status { font-weight: bold; margin-top: 7px; }
+    .ready { color: #4ade80; }
+    .warning { color: #facc15; }
+    .error { color: #fb7185; }
+    footer { text-align: center; color: #8292a8; font-size: 12px; margin-top: 25px; }
+    @media (max-width: 420px) {
+      h1 { font-size: 23px; }
+      .item { grid-template-columns: 72px 1fr; gap: 9px; }
+      .preview { width: 72px; height: 72px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>Creative Delivery Checker</h1>
+      <p>Check your image files before delivering them to a client.</p>
+    </header>
+
+    <section class="panel">
+      <div class="upload">
+        <h3>Select Your Images</h3>
+        <p class="note">Upload JPG, PNG, WebP or GIF files.</p>
+        <input id="fileInput" type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif" multiple>
+        <p class="note">Maximum 20 images · Maximum 10 MB per image</p>
+      </div>
+      <div id="message" role="status"></div>
+      <button id="exportBtn" disabled>Download CSV Report</button>
+      <button id="clearBtn" class="secondary" disabled>Clear All</button>
+    </section>
+
+    <section class="stats">
+      <div class="stat"><strong id="total">0</strong><span>Total Files</span></div>
+      <div class="stat"><strong id="good">0</strong><span>Ready</span></div>
+      <div class="stat"><strong id="issues">0</strong><span>Needs Review</span></div>
+    </section>
+
+    <section id="results" aria-live="polite">
+      <div class="panel note" id="empty">
+        Your image checks will appear here.
+      </div>
+    </section>
+
+    <footer>
+      Your files are checked locally in your browser. They are not uploaded to a server.
+    </footer>
+  </main>
+
+<script>
+(() => {
+  "use strict";
+
+  const MAX_FILES = 20;
+  const MAX_SIZE = 10 * 1024 * 1024;
+  const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
+  const input = document.getElementById("fileInput");
+  const results = document.getElementById("results");
+  const message = document.getElementById("message");
+  const exportBtn = document.getElementById("exportBtn");
+  const clearBtn = document.getElementById("clearBtn");
+
+  let items = [];
+  let busy = false;
+
+  function formatSize(bytes) {
+    return bytes < 1024 * 1024
+      ? (bytes / 1024).toFixed(1) + " KB"
+      : (bytes / (1024 * 1024)).toFixed(2) + " MB";
+  }
+
+  function gcd(a, b) {
+    while (b) [a, b] = [b, a % b];
+    return a;
+  }
+
+  function getDimensions(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+
+      img.onload = () => {
+        const width = img.naturalWidth;
+        const height = img.naturalHeight;
+        URL.revokeObjectURL(url);
+
+        if (!width || !height) {
+          reject(new Error("Invalid image dimensions"));
+          return;
+        }
+        const divisor = gcd(width, height);
+        resolve({
+          width,
+          height,
+          ratio: (width / divisor) + ":" + (height / divisor)
+        });
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Could not read this image"));
+      };
+
+      img.src = url;
+    });
+  }
+
+  async function getHash(file) {
+    if (!window.crypto || !window.crypto.subtle) return null;
+
+    const buffer = await file.arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-256", buffer);
+    return Array.from(new Uint8Array(digest))
+      .map(byte => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  function setBusy(value) {
+    busy = value;
+    input.disabled = value;
+    exportBtn.disabled = value || items.length === 0;
+    clearBtn.disabled = value || items.length === 0;
+  }
+
+  function updateStats() {
+    const ready = items.filter(item => item.status === "ready").length;
+    document.getElementById("total").textContent = items.length;
+    document.getElementById("good").textContent = ready;
+    document.getElementById("issues").textContent = items.length - ready;
+
+    exportBtn.disabled = busy || items.length === 0;
+    clearBtn.disabled = busy || items.length === 0;
+  }
+
+  function render() {
+    results.replaceChildren();
+
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.className = "panel note";
+      empty.textContent = "Your image checks will appear here.";
+      results.appendChild(empty);
+      updateStats();
+      return;
+    }
+
+    for (const item of items) {
+      const card = document.createElement("article");
+      card.className = "item";
+
+      if (item.url) {
+        const img = document.createElement("img");
+        img.className = "preview";
+        img.src = item.url;
+        img.alt = "Image preview";
+        img.loading = "lazy";
+        card.appendChild(img);
+      } else {
+        const placeholder = document.createElement("div");
+        placeholder.className = "preview";
+        card.appendChild(placeholder);
+      }
+
+      const details = document.createElement("div");
+      details.className = "details";
+
+      const name = document.createElement("div");
+      name.className = "filename";
+      name.textContent = item.name;
+      details.appendChild(name);
+
+      const lines = [
+        "Format: " + (item.format || "Unknown"),
+        "File size: " + formatSize(item.size),
+        "Dimensions: " + (item.width ? item.width + " × " + item.height : "Unavailable"),
+        "Aspect ratio: " + (item.ratio || "Unavailable")
+      ];
+
+      for (const line of lines) {
+        const p = document.createElement("p");
+        p.textContent = line;
+        details.appendChild(p);
+      }
+
+      const status = document.createElement("div");
+      status.className = "status " + item.statusClass;
+      status.textContent = item.statusText;
+      details.appendChild(status);
+
+      card.appendChild(details);
+      results.appendChild(card);
+    }
+
+    updateStats();
+  }
+
+  function addMessage(text) {
+    message.textContent = text;
+  }
+
+  input.addEventListener("change", async () => {
+    if (busy) return;
+
+    const selected = Array.from(input.files || []);
+    input.value = "";
+
+    if (!selected.length) return;
+
+    const available = MAX_FILES - items.length;
+    if (available <= 0) {
+      addMessage("Maximum of 20 files reached. Clear files to start again.");
+      return;
+    }
+
+    const batch = selected.slice(0, available);
+    const skipped = selected.length - batch.length;
+
+    setBusy(true);
+    let processed = 0;
+
+    try {
+      for (const file of batch) {
+        processed++;
+        addMessage("Checking " + processed + " of " + batch.length + "...");
+
+        const item = {
+          name: file.name,
+          size: file.size,
+          format: file.type || "Unknown",
+          width: null,
+          height: null,
+          ratio: null,
+          hash: null,
+          url: null,
+          status: "review",
+          statusClass: "warning",
+          statusText: "Needs review"
+        };
+
+        if (!allowedTypes.includes(file.type)) {
+          item.status = "error";
+          item.statusClass = "error";
+          item.statusText = "Unsupported format";
+          items.push(item);
+          render();
+          continue;
+        }
+
+        if (file.size > MAX_SIZE) {
+          item.status = "error";
+          item.statusClass = "error";
+          item.statusText = "File exceeds 10 MB limit";
+          items.push(item);
+          render();
+          continue;
+        }
+
+        try {
+          const dimensions = await getDimensions(file);
+          item.width = dimensions.width;
+          item.height = dimensions.height;
+          item.ratio = dimensions.ratio;
+          item.url = URL.createObjectURL(file);
+
+          try {
+            item.hash = await getHash(file);
+          } catch (hashError) {
+            item.hash = null;
+          }
+
+          const duplicate = item.hash && items.some(
+            previous => previous.hash === item.hash
+          );
+
+          if (duplicate) {
+            item.status = "review";
+            item.statusClass = "warning";
+            item.statusText = "Exact duplicate found";
+          } else {
+            item.status = "ready";
+            item.statusClass = "ready";
+            item.statusText = "Basic checks passed";
+          }
+        } catch (error) {
+          item.status = "error";
+          item.statusClass = "error";
+          item.statusText = "Could not read image";
+        }
+
+        items.push(item);
+        render();
+      }
+
+      addMessage(
+        "Finished checking " + batch.length + " file(s)." +
+        (skipped ? " " + skipped + " extra file(s) skipped." : "")
+      );
+    } finally {
+      setBusy(false);
+      render();
+    }
+  });
+
+  function csvSafe(value) {
+    let text = String(value ?? "");
+    if (/^[=+\-@]/.test(text)) text = "'" + text;
+    return '"' + text.replace(/"/g, '""') + '"';
+  }
+
+  exportBtn.addEventListener("click", () => {
+    if (busy || !items.length) return;
+
+    const headers = [
+      "File Name", "Format", "Size", "Width", "Height",
+      "Aspect Ratio", "Status"
+    ];
+
+    const rows = items.map(item => [
+      item.name,
+      item.format,
+      formatSize(item.size),
+      item.width || "",
+      item.height || "",
+      item.ratio || "",
+      item.statusText
+    ]);
+
+    const csv = [headers, ...rows]
+      .map(row => row.map(csvSafe).join(","))
+      .join("\r\n");
+
+    const blob = new Blob(["\uFEFF" + csv], {
+      type: "text/csv;charset=utf-8;"
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "creative-delivery-report.csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  clearBtn.addEventListener("click", () => {
+    if (busy) return;
+
+    for (const item of items) {
+      if (item.url) URL.revokeObjectURL(item.url);
+    }
+
+    items = [];
+    addMessage("All files cleared.");
+    render();
+  });
+
+  render();
+})();
+</script>
+</body>
+      </html>
